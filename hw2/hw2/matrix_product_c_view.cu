@@ -2,7 +2,8 @@
 #undef _GLIBCXX_USE_INT128
 
 #include <thrust/device_vector.h>
-#include <device_launch_parameters.h>
+#include <thrust/host_vector.h>
+#include <thrust/copy.h>
 #include <cublas_v2.h>
 #include <iostream>
 #include <cuda.h>
@@ -15,10 +16,6 @@ int ci(int row, int column, int nColumns)
 {
 	return row * nColumns + column;
 }
-
-float* h_A;
-float* h_B;
-float* h_C;
 
 int rowA = 10;
 int colA = 8;
@@ -34,15 +31,12 @@ cublasStatus_t status;
 
 void device_info();
 void gpu_random_init(float* A, int rows, int cols);
-
-//void copy_from_gpu_to_cpu(float* A, float* B);
-
-void free_all_memory();
-
-void gpu_matrix_product(const float* A, const float* B, float* C, const int m, const int k, const int n);
-void cpu_matrix_product();
+void gpu_matrix_product(const float* A, const float* B, float* C, int m, int k, int n);
+void cpu_matrix_product(const float* A, const float* B, float* C);
 
 void matrix_print(float* A, int rows, int cols);
+
+void check_results();
 
 int main()
 {
@@ -53,31 +47,47 @@ int main()
 	thrust::device_vector<float> d_B(rowB * colB);
 	thrust::device_vector<float> d_C(rowC * colC);
 
-//	gpu_random_init(raw_pointer_cast(&d_A[0]), rowA, colA);
-	//gpu_random_init(raw_pointer_cast(&d_B[0]), rowB, colB);
+	//init matrixies A and B on curandon on device
+	gpu_random_init(raw_pointer_cast(&d_A[0]), rowA, colA);
+	gpu_random_init(raw_pointer_cast(&d_B[0]), rowB, colB);
 
 	cudaEvent_t start, stop;
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
-	cudaEventRecord(start);
+	cudaEventRecord(start, nullptr);
 
-	//gpu_matrix_product(raw_pointer_cast(&d_A[0]), raw_pointer_cast(&d_B[0]), raw_pointer_cast(&d_C[0]), rowA, colA, colB);
-	
-	cudaEventRecord(stop);
+	gpu_matrix_product(raw_pointer_cast(&d_A[0]), raw_pointer_cast(&d_B[0]), raw_pointer_cast(&d_C[0]), rowA, colA, colB);
+
+	cudaEventRecord(stop, nullptr);
 	cudaEventSynchronize(stop);
 	float milliseconds = 0;
 	cudaEventElapsedTime(&milliseconds, start, stop);
+	cudaEventDestroy(start);
+	cudaEventDestroy(stop);
 	printf("CUBLAS time : %f ms\n", milliseconds);
-	
-	//matrix_print(raw_pointer_cast(&d_A[0]), rowA, colA);
-	//matrix_print(raw_pointer_cast(&d_B[0]), rowB, colB);
-	//matrix_print(raw_pointer_cast(&d_C[0]), rowC, colC);
 
-//	copy_from_gpu_to_cpu(raw_pointer_cast(&d_A[0]), raw_pointer_cast(&d_B[0]));
+	thrust::host_vector<float> h_A(rowA * colA);
+	thrust::host_vector<float> h_B(rowB * colB);
+	thrust::host_vector<float> h_C_cublas(rowC * colC);
+	thrust::host_vector<float> h_C_cpu(rowC * colC);
+
+	//Copy matrixies A B C from device to host
+	copy(d_A.begin(), d_A.end(), h_A.begin());
+	copy(d_B.begin(), d_B.end(), h_B.begin());
+	copy(d_C.begin(), d_C.end(), h_C_cublas.begin());
 	
-	status = cublasDestroy(handle);
-	if (status != CUBLAS_STATUS_SUCCESS)
-		printf("shutdown error %s \n", status);
+	clock_t start_time = clock();
+	cpu_matrix_product(&h_A[0], &h_B[0], &h_C_cpu[0]);
+	clock_t end_time = clock();
+	float cpu_time = (int)(end_time - start_time) / CLOCKS_PER_SEC;
+	printf("CPU's time is: %f\n", cpu_time);
+
+	matrix_print(&h_C_cublas[0], rowC, colC);
+	printf("\n\n\n");
+	matrix_print(&h_C_cpu[0], rowC, colC);
+
+
+	check_results();
 
 	return 0;
 }
@@ -112,18 +122,7 @@ void device_info()
 	}
 }
 
-//void copy_from_gpu_to_cpu(float* A, float* B)
-//{
-//	h_A = (float *)malloc(rowA * colA * sizeof(float)); 
-//	h_B = (float *)malloc(rowB * colB * sizeof(float)); 
-//	h_C = (float *)malloc(rowC * colC * sizeof(float));
-//
-//	cudaMemcpy(h_A, A, rowA * colA * sizeof(float), cudaMemcpyDeviceToHost);
-//	cudaMemcpy(h_B, B, rowB * colB * sizeof(float), cudaMemcpyDeviceToHost);
-//}
-
-// C(m,n) = A(m,k) * B(k,n)
-void gpu_matrix_product(const float* A, const float* B, float* C, const int m, const int k, const int n)
+void gpu_matrix_product(const float* A, const float* B, float* C)
 {
 	// Initialize CUBLAS 
 	status = cublasCreate(&handle);
@@ -140,9 +139,26 @@ void gpu_matrix_product(const float* A, const float* B, float* C, const int m, c
 		printf("Kernel execution error with message %s\n", status);
 }
 
-void cpu_matrix_product()
+void cpu_matrix_product(const float* A, const float* B, float* C)
 {
+	for (int i = 0; i < rowC; i++)
+	{
+		for (int j = 0; j < colC; j++)
+		{
+			C[ci(i, j, colC)] = 0;
+		}
+	}
 
+	for (int i = 0; i < rowC; i++)
+	{
+		for (int j = 0; j < colC; j++)
+		{
+			for (int k = 0; k < colC; k++)
+			{
+				C[ci(i, j, colC)] += A[ci(i, k, colC)] * B[ci(k, j, colC)];
+			}
+		}
+	}
 }
 
 void gpu_random_init(float* A, int rows, int cols)
@@ -162,12 +178,16 @@ void gpu_random_init(float* A, int rows, int cols)
 
 void matrix_print(float* A, int rows, int cols)
 {
-	for (size_t i = 0; i < rows; i++)
+	for (int i = 0; i < rows; i++)
 	{
-		for (size_t j = 0; j < cols; j++)
+		for (int j = 0; j < cols; j++)
 		{
 			std::cout << A[ci(i, j, cols)] << " ";
 		}
 		printf("\n");
 	}
+}
+
+void check_results()
+{
 }
