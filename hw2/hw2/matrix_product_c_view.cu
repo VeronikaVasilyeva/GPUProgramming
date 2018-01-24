@@ -9,7 +9,6 @@
 #include <cuda.h>
 #include <curand.h>
 #include <stdio.h>
-#include <time.h>
 
 // C-style indexing
 int ci(int row, int column, int nColumns)
@@ -17,11 +16,11 @@ int ci(int row, int column, int nColumns)
 	return row * nColumns + column;
 }
 
-int rowA = 10;
-int colA = 8;
+int rowA = 100;
+int colA = 100;
 
 int rowB = colA;
-int colB = 2;
+int colB = 100;
 
 int rowC = rowA;
 int colC = colB;
@@ -31,12 +30,12 @@ cublasStatus_t status;
 
 void device_info();
 void gpu_random_init(float* A, int rows, int cols);
-void gpu_matrix_product(const float* A, const float* B, float* C, int m, int k, int n);
+void gpu_matrix_product(const float* A, const float* B, float* C);
 void cpu_matrix_product(const float* A, const float* B, float* C);
 
 void matrix_print(float* A, int rows, int cols);
 
-void check_results();
+void check_results(float* A, float* B);
 
 int main()
 {
@@ -54,11 +53,11 @@ int main()
 	cudaEvent_t start, stop;
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
-	cudaEventRecord(start, nullptr);
+	cudaEventRecord(start, 0);
 
-	gpu_matrix_product(raw_pointer_cast(&d_A[0]), raw_pointer_cast(&d_B[0]), raw_pointer_cast(&d_C[0]), rowA, colA, colB);
+	gpu_matrix_product(raw_pointer_cast(&d_A[0]), raw_pointer_cast(&d_B[0]), raw_pointer_cast(&d_C[0]));
 
-	cudaEventRecord(stop, nullptr);
+	cudaEventRecord(stop, 0);
 	cudaEventSynchronize(stop);
 	float milliseconds = 0;
 	cudaEventElapsedTime(&milliseconds, start, stop);
@@ -75,19 +74,24 @@ int main()
 	copy(d_A.begin(), d_A.end(), h_A.begin());
 	copy(d_B.begin(), d_B.end(), h_B.begin());
 	copy(d_C.begin(), d_C.end(), h_C_cublas.begin());
-	
-	clock_t start_time = clock();
+
+	//Evaluate matrix product on cpu
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+	cudaEventRecord(start, 0);
+
 	cpu_matrix_product(&h_A[0], &h_B[0], &h_C_cpu[0]);
-	clock_t end_time = clock();
-	float cpu_time = (int)(end_time - start_time) / CLOCKS_PER_SEC;
-	printf("CPU's time is: %f\n", cpu_time);
 
-	matrix_print(&h_C_cublas[0], rowC, colC);
-	printf("\n\n\n");
-	matrix_print(&h_C_cpu[0], rowC, colC);
+	cudaEventRecord(stop, 0);
+	cudaEventSynchronize(stop);
+	milliseconds = 0;
+	cudaEventElapsedTime(&milliseconds, start, stop);
+	cudaEventDestroy(start);
+	cudaEventDestroy(stop);
+	printf("CPU's time : %f ms\n", milliseconds);
 
-
-	check_results();
+	//Compare matrixies by elements
+	check_results(&h_C_cublas[0], &h_C_cpu[0]);
 
 	return 0;
 }
@@ -149,13 +153,13 @@ void cpu_matrix_product(const float* A, const float* B, float* C)
 		}
 	}
 
-	for (int i = 0; i < rowC; i++)
+	for (int i = 0; i < rowA; i++)
 	{
-		for (int j = 0; j < colC; j++)
+		for (int j = 0; j < colB; j++)
 		{
-			for (int k = 0; k < colC; k++)
+			for (int k = 0; k < colA; k++)
 			{
-				C[ci(i, j, colC)] += A[ci(i, k, colC)] * B[ci(k, j, colC)];
+				C[ci(i, j, colC)] += A[ci(i, k, colA)] * B[ci(k, j, colB)];
 			}
 		}
 	}
@@ -188,6 +192,19 @@ void matrix_print(float* A, int rows, int cols)
 	}
 }
 
-void check_results()
+void check_results(float* A, float* B)
 {
+	float eps = 0.001;
+
+	for (int i = 0; i < rowC; i++)
+	{
+		for (int j = 0; j < colC; j++)
+		{
+			if (fabs(A[ci(i, j, colC)] - B[ci(i, j, colC)]) > eps)
+			{
+				printf("The element %f is not equal $f \n", A[ci(i, j, colC)], B[ci(i, j, colC)]);
+				return;
+			}
+		}
+	}
 }
