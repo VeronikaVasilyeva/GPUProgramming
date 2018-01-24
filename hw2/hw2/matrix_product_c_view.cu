@@ -6,7 +6,9 @@
 #include <cublas_v2.h>
 #include <iostream>
 #include <cuda.h>
+#include <curand.h>
 #include <stdio.h>
+#include <time.h>
 
 // C-style indexing
 int ci(int row, int column, int nColumns)
@@ -14,100 +16,68 @@ int ci(int row, int column, int nColumns)
 	return row * nColumns + column;
 }
 
-const int MATRIX_SIZE = 10;
-//const int SIZE = ARRAY_SIZE * sizeof(float);
-
-cudaError_t err;
-const int BLOCK_SIZE = 512;
-//int GRID_SIZE = (ARRAY_SIZE % BLOCK_SIZE == 0) ? ARRAY_SIZE / BLOCK_SIZE : (ARRAY_SIZE / BLOCK_SIZE + 1);
-
 float* h_A;
 float* h_B;
-float* d_A;
-float* d_B;
 float* h_C;
-float* d_C;
+
+int rowA = 10;
+int colA = 8;
+
+int rowB = colA;
+int colB = 2;
+
+int rowC = rowA;
+int colC = colB;
+
+cublasHandle_t handle;
+cublasStatus_t status;
 
 void device_info();
-void initialize_matrix();
-void malloc_cpu_memory();
-void malloc_gpu_memory();
-void copy_from_cpu_to_gpu();
-void copy_from_gpu_to_cpu();
+void gpu_random_init(float* A, int rows, int cols);
+
+//void copy_from_gpu_to_cpu(float* A, float* B);
+
 void free_all_memory();
-float matrix_product_cpu();
+
+void gpu_matrix_product(const float* A, const float* B, float* C, const int m, const int k, const int n);
+void cpu_matrix_product();
+
+void matrix_print(float* A, int rows, int cols);
 
 int main()
 {
 	device_info();
 
-	// initialize data
-	thrust::device_vector<float> D(MATRIX_SIZE * MATRIX_SIZE);
-	thrust::device_vector<float> E(MATRIX_SIZE * MATRIX_SIZE);
-	thrust::device_vector<float> F(MATRIX_SIZE * MATRIX_SIZE);
+	// allocate three device_vectors with row*col elements
+	thrust::device_vector<float> d_A(rowA * colA);
+	thrust::device_vector<float> d_B(rowB * colB);
+	thrust::device_vector<float> d_C(rowC * colC);
 
-	for (size_t i = 0; i < MATRIX_SIZE; i++)
-	{
-		for (size_t j = 0; j < MATRIX_SIZE; j++)
-		{
-			D[ci(i, j, MATRIX_SIZE)] = i + j;
-			std::cout << D[ci(i, j, MATRIX_SIZE)] << " ";
-		}
-		printf("\n");
-	}
+//	gpu_random_init(raw_pointer_cast(&d_A[0]), rowA, colA);
+	//gpu_random_init(raw_pointer_cast(&d_B[0]), rowB, colB);
 
-	for (size_t i = 0; i < MATRIX_SIZE; i++)
-	{
-		for (size_t j = 0; j < MATRIX_SIZE; j++)
-		{
-			E[ci(i, j, MATRIX_SIZE)] = i + j;
-			std::cout << E[ci(i, j, MATRIX_SIZE)] << " ";
-		}
-		printf("\n");
-	}
+	cudaEvent_t start, stop;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+	cudaEventRecord(start);
 
-	for (size_t i = 0; i < MATRIX_SIZE; i++)
-	{
-		for (size_t j = 0; j < MATRIX_SIZE; j++)
-		{
-			F[ci(i, j, MATRIX_SIZE)] = 0;
-		}
-	}
-	cublasHandle_t handle;
+	//gpu_matrix_product(raw_pointer_cast(&d_A[0]), raw_pointer_cast(&d_B[0]), raw_pointer_cast(&d_C[0]), rowA, colA, colB);
+	
+	cudaEventRecord(stop);
+	cudaEventSynchronize(stop);
+	float milliseconds = 0;
+	cudaEventElapsedTime(&milliseconds, start, stop);
+	printf("CUBLAS time : %f ms\n", milliseconds);
+	
+	//matrix_print(raw_pointer_cast(&d_A[0]), rowA, colA);
+	//matrix_print(raw_pointer_cast(&d_B[0]), rowB, colB);
+	//matrix_print(raw_pointer_cast(&d_C[0]), rowC, colC);
 
-	/* Initialize CUBLAS */
-	cublasStatus_t status = cublasCreate(&handle);
-	if (status != CUBLAS_STATUS_SUCCESS)
-	{
-		printf("CUBLAS initialization error with message %s\n", status);
-	}
-
-	float alpha = 1.0f;
-	float beta = 0.0f;
-	status = cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
-	                     MATRIX_SIZE, MATRIX_SIZE, MATRIX_SIZE,
-	                     &alpha, raw_pointer_cast(&E[0]), MATRIX_SIZE,
-	                     raw_pointer_cast(&D[0]), MATRIX_SIZE,
-	                     &beta, raw_pointer_cast(&F[0]), MATRIX_SIZE); // colE  x rowD
-	if (status != CUBLAS_STATUS_SUCCESS)
-	{
-		printf("Kernel execution error with message %s\n", status);
-	}
-
-	for (size_t i = 0; i < MATRIX_SIZE; i++)
-	{
-		for (size_t j = 0; j < MATRIX_SIZE; j++)
-		{
-			std::cout << F[ci(i, j, MATRIX_SIZE)] << " ";
-		}
-		printf("\n");
-	}
-
+//	copy_from_gpu_to_cpu(raw_pointer_cast(&d_A[0]), raw_pointer_cast(&d_B[0]));
+	
 	status = cublasDestroy(handle);
 	if (status != CUBLAS_STATUS_SUCCESS)
-	{
 		printf("shutdown error %s \n", status);
-	}
 
 	return 0;
 }
@@ -139,5 +109,65 @@ void device_info()
 		printf("Max block dimensions: [ %i, %i, %i]\n", props.maxThreadsDim[0], props.maxThreadsDim[1],
 		       props.maxThreadsDim[2]);
 		printf("Max grid dimensions:  [ %i, %i, %i]\n", props.maxGridSize[0], props.maxGridSize[1], props.maxGridSize[2]);
+	}
+}
+
+//void copy_from_gpu_to_cpu(float* A, float* B)
+//{
+//	h_A = (float *)malloc(rowA * colA * sizeof(float)); 
+//	h_B = (float *)malloc(rowB * colB * sizeof(float)); 
+//	h_C = (float *)malloc(rowC * colC * sizeof(float));
+//
+//	cudaMemcpy(h_A, A, rowA * colA * sizeof(float), cudaMemcpyDeviceToHost);
+//	cudaMemcpy(h_B, B, rowB * colB * sizeof(float), cudaMemcpyDeviceToHost);
+//}
+
+// C(m,n) = A(m,k) * B(k,n)
+void gpu_matrix_product(const float* A, const float* B, float* C, const int m, const int k, const int n)
+{
+	// Initialize CUBLAS 
+	status = cublasCreate(&handle);
+	if (status != CUBLAS_STATUS_SUCCESS)
+		printf("CUBLAS initialization error with message %s\n", status);
+
+	float alpha = 1.0f;
+	float beta = 0.0f;
+
+	//C = alpha*A*B + beta * C
+	status = cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, colB, rowA, colA, &alpha, B, colB, A, colA, &beta, C, colC);
+
+	if (status != CUBLAS_STATUS_SUCCESS)
+		printf("Kernel execution error with message %s\n", status);
+}
+
+void cpu_matrix_product()
+{
+
+}
+
+void gpu_random_init(float* A, int rows, int cols)
+{
+	// Create a pseudo-random number generator
+	curandGenerator_t gen;
+	curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT);
+
+	// Set the seed for the random number generator using the system clock
+	curandSetPseudoRandomGeneratorSeed(gen, (unsigned long long)clock());
+
+	// Fill the array with random numbers on the device
+	size_t n = rows * cols;
+	curandGenerateUniform(gen, A, n);
+	curandDestroyGenerator(gen); /* Cleanup */
+}
+
+void matrix_print(float* A, int rows, int cols)
+{
+	for (size_t i = 0; i < rows; i++)
+	{
+		for (size_t j = 0; j < cols; j++)
+		{
+			std::cout << A[ci(i, j, cols)] << " ";
+		}
+		printf("\n");
 	}
 }
