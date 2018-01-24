@@ -16,11 +16,11 @@ int ci(int row, int column, int nColumns)
 	return row * nColumns + column;
 }
 
-int rowA = 100;
-int colA = 100;
+int rowA = 1000;
+int colA = 3000;
 
 int rowB = colA;
-int colB = 100;
+int colB = 2000;
 
 int rowC = rowA;
 int colC = colB;
